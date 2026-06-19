@@ -121,6 +121,13 @@ function uvEnv() {
   };
 }
 
+// Expose the venv path to (sandboxed) preloads synchronously, so preload.js can
+// publish it via contextBridge without needing Node APIs of its own. Registered
+// once at module load (not per-window/per-init) to avoid stacking listeners.
+ipcMain.on("get-venv-path", (event) => {
+  event.returnValue = path.join(DATASETTE_APP_DIR, "venv");
+});
+
 // 'SQLite format 3\0':
 const SQLITE_HEADER = Buffer.from("53514c69746520666f726d6174203300", "hex");
 
@@ -709,7 +716,9 @@ function windowOpts(extraOpts) {
     height: 600,
     webPreferences: {
       preload: path.join(__dirname, extraOpts.preload || "preload.js"),
-      sandbox: false,
+      // Preloads are sandbox-safe (no Node APIs; venvPath comes via sync IPC),
+      // so keep the renderer sandbox on for defense in depth.
+      sandbox: true,
     },
   };
   if (BrowserWindow.getFocusedWindow()) {

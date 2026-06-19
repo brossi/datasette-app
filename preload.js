@@ -1,5 +1,4 @@
 const { ipcRenderer, contextBridge } = require("electron");
-const path = require("path");
 contextBridge.exposeInMainWorld("datasetteApp", {
   importCsv: (database) => {
     ipcRenderer.send("import-csv", database);
@@ -34,7 +33,9 @@ contextBridge.exposeInMainWorld("datasetteApp", {
   onProcessLog: (callback) => {
     ipcRenderer.on("processLog", callback);
   },
-  venvPath: path.join(process.env.HOME, ".datasette-app", "venv"),
+  // Resolved in the main process via synchronous IPC so this preload needs no
+  // Node APIs and can run under sandbox: true.
+  venvPath: ipcRenderer.sendSync("get-venv-path"),
 });
 ipcRenderer.on("csv-imported", () => {
   location.reload();

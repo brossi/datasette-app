@@ -39,6 +39,17 @@ test('App launches, builds the venv via uv, and quits', async () => {
   });
   await sleep(1000);
 
+  // The preload's contextBridge API must survive sandbox: true — including
+  // venvPath, which is resolved via synchronous IPC rather than Node APIs.
+  const api = await window.evaluate(() => ({
+    importCsv: typeof window.datasetteApp?.importCsv,
+    installPlugin: typeof window.datasetteApp?.installPlugin,
+    venvPath: window.datasetteApp?.venvPath,
+  }));
+  expect(api.importCsv).toBe('function');
+  expect(api.installPlugin).toBe('function');
+  expect(api.venvPath).toContain('.datasette-app/venv');
+
   // The venv must have been (re)built by the bundled uv, not by python -m venv.
   // uv stamps the interpreter config with a `uv = <version>` line.
   const pyvenvCfg = fs.readFileSync(path.join(venvDir, 'pyvenv.cfg'), 'utf8');
