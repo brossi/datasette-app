@@ -156,15 +156,25 @@ class DatasetteServer {
     }
   }
   async about() {
-    const data = await netRequestJson(
-      `http://localhost:${this.port}/-/versions.json`
-    );
+    let data;
+    try {
+      data = await netRequestJson(
+        `http://localhost:${this.port}/-/versions.json`
+      );
+    } catch (e) {
+      return [
+        "An open source multi-tool for exploring and publishing data",
+        "",
+        "(Unable to read version information)",
+      ].join("\n");
+    }
+    // Use optional chaining in case the response shape is unexpected
     return [
       "An open source multi-tool for exploring and publishing data",
       "",
-      `Datasette: ${data.datasette.version}`,
-      `Python: ${data.python.version}`,
-      `SQLite: ${data.sqlite.version}`,
+      `Datasette: ${data?.datasette?.version}`,
+      `Python: ${data?.python?.version}`,
+      `SQLite: ${data?.sqlite?.version}`,
     ].join("\n");
   }
   async setAccessControl(accessControl) {
@@ -310,13 +320,20 @@ class DatasetteServer {
     this.process.kill();
   }
 
-  // Resolves with the already-parsed JSON response body.
+  // Resolves with the already-parsed JSON response body. On a transport or
+  // parse failure it resolves with {ok: false, error} rather than rejecting,
+  // so callers' existing `if (!responseJson.ok)` handling surfaces the problem
+  // in a dialog instead of producing an unhandled rejection / silent failure.
   async apiRequest(path, body) {
-    return await netRequestJson(`http://localhost:${this.port}${path}`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${this.apiToken}` },
-      body,
-    });
+    try {
+      return await netRequestJson(`http://localhost:${this.port}${path}`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${this.apiToken}` },
+        body,
+      });
+    } catch (e) {
+      return { ok: false, error: e.message || String(e) };
+    }
   }
 
   async execCommand(command, args) {
