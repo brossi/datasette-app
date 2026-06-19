@@ -6,10 +6,10 @@ const {
   dialog,
   shell,
   ipcMain,
+  net,
 } = require("electron");
 const EventEmitter = require("events");
 const crypto = require("crypto");
-const request = require("electron-request");
 const path = require("path");
 const os = require("os");
 const cp = require("child_process");
@@ -22,9 +22,48 @@ const util = require("util");
 const execFile = util.promisify(cp.execFile);
 const mkdir = util.promisify(fs.mkdir);
 
-require("update-electron-app")({
+const { updateElectronApp } = require("update-electron-app");
+
+updateElectronApp({
   updateInterval: "1 hour",
 });
+
+// Minimal JSON-over-HTTP helper built on Electron's native `net` module,
+// replacing the unmaintained electron-request dependency. Resolves with the
+// parsed JSON body, or rejects on a transport error or non-JSON response.
+function netRequestJson(url, { method = "GET", headers = {}, body } = {}) {
+  return new Promise((resolve, reject) => {
+    const request = net.request({ method, url });
+    for (const [key, value] of Object.entries(headers)) {
+      request.setHeader(key, value);
+    }
+    request.on("response", (response) => {
+      const chunks = [];
+      response.on("data", (chunk) => chunks.push(chunk));
+      response.on("end", () => {
+        const text = Buffer.concat(chunks).toString();
+        try {
+          resolve(JSON.parse(text));
+        } catch (e) {
+          reject(
+            new Error(
+              `Expected JSON from ${url} but could not parse response: ${text.slice(
+                0,
+                200
+              )}`
+            )
+          );
+        }
+      });
+    });
+    request.on("error", reject);
+    if (body !== undefined) {
+      request.setHeader("Content-Type", "application/json");
+      request.write(JSON.stringify(body));
+    }
+    request.end();
+  });
+}
 
 const RANDOM_SECRET = crypto.randomBytes(32).toString("hex");
 
@@ -66,10 +105,10 @@ function configureWindow(window) {
     let backItem = menu.getMenuItemById("back-item");
     let forwardItem = menu.getMenuItemById("forward-item");
     if (backItem) {
-      backItem.enabled = window.webContents.canGoBack();
+      backItem.enabled = window.webContents.navigationHistory.canGoBack();
     }
     if (forwardItem) {
-      forwardItem.enabled = window.webContents.canGoForward();
+      forwardItem.enabled = window.webContents.navigationHistory.canGoForward();
     }
   });
 }
@@ -100,10 +139,9 @@ class DatasetteServer {
       endpoint = "/-/open-csv-file";
       errorMessage = "Error opening CSV file";
     }
-    const response = await this.apiRequest(endpoint, {
+    const responseJson = await this.apiRequest(endpoint, {
       path: filepath,
     });
-    const responseJson = await response.json();
     if (!responseJson.ok) {
       console.log(responseJson);
       dialog.showMessageBox({
@@ -118,10 +156,9 @@ class DatasetteServer {
     }
   }
   async about() {
-    const response = await request(
+    const data = await netRequestJson(
       `http://localhost:${this.port}/-/versions.json`
     );
-    const data = await response.json();
     return [
       "An open source multi-tool for exploring and publishing data",
       "",
@@ -273,13 +310,12 @@ class DatasetteServer {
     this.process.kill();
   }
 
+  // Resolves with the already-parsed JSON response body.
   async apiRequest(path, body) {
-    return await request(`http://localhost:${this.port}${path}`, {
+    return await netRequestJson(`http://localhost:${this.port}${path}`, {
       method: "POST",
-      body: JSON.stringify(body),
-      headers: {
-        Authorization: `Bearer ${this.apiToken}`,
-      },
+      headers: { Authorization: `Bearer ${this.apiToken}` },
+      body,
     });
   }
 
@@ -399,9 +435,9 @@ class DatasetteServer {
     let shouldCreateVenv = true;
     if (fs.existsSync(venv_dir)) {
       // Check Python interpreter still works, using
-      // ~/.datasette-app/venv/bin/python3.9 --version
+      // ~/.datasette-app/venv/bin/python3 --version
       // See https://github.com/simonw/datasette-app/issues/89
-      const venv_python = path.join(venv_dir, "bin", "python3.9");
+      const venv_python = path.join(venv_dir, "bin", "python3");
       try {
         await this.execCommand(venv_python, ["--version"]);
         shouldCreateVenv = false;
@@ -483,9 +519,9 @@ class DatasetteServer {
 function findPython() {
   const possibilities = [
     // In packaged app
-    path.join(process.resourcesPath, "python", "bin", "python3.9"),
+    path.join(process.resourcesPath, "python", "bin", "python3"),
     // In development
-    path.join(__dirname, "python", "bin", "python3.9"),
+    path.join(__dirname, "python", "bin", "python3"),
   ];
   for (const path of possibilities) {
     if (fs.existsSync(path)) {
@@ -554,11 +590,10 @@ function showStartupFailure(loadingWindow, err) {
 }
 
 async function importCsvFromUrl(url, tableName) {
-  const response = await datasette.apiRequest("/-/open-csv-from-url", {
+  const responseJson = await datasette.apiRequest("/-/open-csv-from-url", {
     url: url,
     table_name: tableName,
   });
-  const responseJson = await response.json();
   if (!responseJson.ok) {
     console.log(responseJson);
     dialog.showMessageBox({
@@ -658,11 +693,10 @@ async function initializeApp() {
       return;
     }
     let pathToOpen = null;
-    const response = await datasette.apiRequest("/-/import-csv-file", {
+    const responseJson = await datasette.apiRequest("/-/import-csv-file", {
       path: selectedFiles[0],
       database: database,
     });
-    const responseJson = await response.json();
     if (!responseJson.ok) {
       console.log(responseJson);
       dialog.showMessageBox({
@@ -700,7 +734,7 @@ function buildMenu() {
     click() {
       let window = BrowserWindow.getFocusedWindow();
       if (window) {
-        window.webContents.goBack();
+        window.webContents.navigationHistory.goBack();
       }
     },
     enabled: false,
@@ -712,15 +746,15 @@ function buildMenu() {
     click() {
       let window = BrowserWindow.getFocusedWindow();
       if (window) {
-        window.webContents.goForward();
+        window.webContents.navigationHistory.goForward();
       }
     },
     enabled: false,
   };
 
   app.on("browser-window-focus", (event, window) => {
-    forwardItem.enabled = window.webContents.canGoForward();
-    backItem.enabled = window.webContents.canGoBack();
+    forwardItem.enabled = window.webContents.navigationHistory.canGoForward();
+    backItem.enabled = window.webContents.navigationHistory.canGoBack();
   });
 
   function buildNetworkChanged(setting) {
@@ -852,10 +886,12 @@ function buildMenu() {
             let pathToOpen = null;
             for (const filepath of selectedFiles) {
               app.addRecentDocument(filepath);
-              const response = await datasette.apiRequest("/-/open-csv-file", {
-                path: filepath,
-              });
-              const responseJson = await response.json();
+              const responseJson = await datasette.apiRequest(
+                "/-/open-csv-file",
+                {
+                  path: filepath,
+                }
+              );
               if (!responseJson.ok) {
                 console.log(responseJson);
                 dialog.showMessageBox({
@@ -902,11 +938,10 @@ function buildMenu() {
             }
             let pathToOpen = null;
             for (const filepath of selectedFiles) {
-              const response = await datasette.apiRequest(
+              const responseJson = await datasette.apiRequest(
                 "/-/open-database-file",
                 { path: filepath }
               );
-              const responseJson = await response.json();
               if (!responseJson.ok) {
                 console.log(responseJson);
                 dialog.showMessageBox({
@@ -935,11 +970,10 @@ function buildMenu() {
             if (!filepath) {
               return;
             }
-            const response = await datasette.apiRequest(
+            const responseJson = await datasette.apiRequest(
               "/-/new-empty-database-file",
               { path: filepath }
             );
-            const responseJson = await response.json();
             if (!responseJson.ok) {
               console.log(responseJson);
               dialog.showMessageBox({

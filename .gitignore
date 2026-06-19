@@ -6,3 +6,4 @@ dist
 *.tar.gz
 python
 test-videos
+test-results
