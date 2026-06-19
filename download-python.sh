@@ -1,6 +1,19 @@
 #!/bin/bash
 set -euo pipefail
 
+# Datasette.app ships a native Apple-Silicon (arm64) interpreter. Universal and
+# Intel builds are deliberately out of scope, so refuse to run on anything else
+# rather than silently producing a dist/mac tree the (arm64) build config and CI
+# paths don't expect.
+arch=`uname -m`
+if [ "$arch" != "arm64" ]; then
+    echo "error: Datasette.app builds are Apple-Silicon (arm64) only; detected '${arch}'." >&2
+    echo "       Build on an arm64 Mac; Intel/Universal builds are not supported." >&2
+    exit 1
+fi
+# astral assets use 'aarch64' for arm64 macOS.
+asset_arch="aarch64"
+
 # Standalone Python build from https://github.com/astral-sh/python-build-standalone
 # (formerly indygreg/python-build-standalone). Pinned to a specific release so
 # builds are reproducible.
@@ -11,20 +24,33 @@ cpython_version="3.13.14"
 # installs. It is bundled alongside the interpreter so it ships inside the app.
 uv_version="0.11.22"
 
-# Match the host architecture so the bundled interpreter runs natively
-# (arm64 Macs would otherwise run an x86_64 Python under Rosetta).
-arch=`uname -m`
-if [ "$arch" = "arm64" ]; then
-    arch="aarch64"
-fi
+# SHA256 of the exact (immutable) release assets downloaded below. These guard
+# against a corrupted or tampered download — the build fails hard on a mismatch
+# rather than bundling an unverified interpreter into a notarized app. Recompute
+# and update these whenever the versions above change (see README "Updating the
+# bundled Python / uv").
+cpython_sha256="0e255968ed96255df59b6bc9504545260c11de3171e48f7640668d88154945ba"
+uv_sha256="97a45e2ff8d5ea262623eed57ec2d9c468a42d74496d5c3c3eef11340235bd7f"
 
-filename="cpython-${cpython_version}+${release_date}-${arch}-apple-darwin-install_only.tar.gz"
+verify_sha256() {
+    # $1 = file, $2 = expected hash
+    local actual
+    actual=`shasum -a 256 "$1" | awk '{print $1}'`
+    if [ "$actual" != "$2" ]; then
+        echo "error: checksum mismatch for $1" >&2
+        echo "       expected: $2" >&2
+        echo "       actual:   $actual" >&2
+        rm -f "$1"
+        exit 1
+    fi
+}
+
+filename="cpython-${cpython_version}+${release_date}-${asset_arch}-apple-darwin-install_only.tar.gz"
 url="https://github.com/astral-sh/python-build-standalone/releases/download/${release_date}/${filename}"
 
-standalone_python="python/"
-
-if [ ! -d "$standalone_python" ]; then
+if [ ! -d "python/" ]; then
     curl -L -O "$url"
+    verify_sha256 "${filename}" "${cpython_sha256}"
     tar -xzf "${filename}"
     rm -rf "${filename}"
     # Delete the bundled stdlib test suite, saving ~23MB of disk space.
@@ -35,10 +61,11 @@ fi
 # Bundle the uv binary next to the interpreter (python/ is copied into the app's
 # Resources, so this ships with no extra packaging config).
 if [ ! -f "python/bin/uv" ]; then
-    uv_dir="uv-${arch}-apple-darwin"
+    uv_dir="uv-${asset_arch}-apple-darwin"
     uv_filename="${uv_dir}.tar.gz"
     uv_url="https://github.com/astral-sh/uv/releases/download/${uv_version}/${uv_filename}"
     curl -L -O "$uv_url"
+    verify_sha256 "${uv_filename}" "${uv_sha256}"
     tar -xzf "${uv_filename}"
     mv "${uv_dir}/uv" python/bin/uv
     rm -rf "${uv_filename}" "${uv_dir}"
