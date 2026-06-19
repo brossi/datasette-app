@@ -22,7 +22,7 @@ cpython_version="3.13.14"
 
 # uv (https://github.com/astral-sh/uv) manages the app's virtualenv and package
 # installs. It is bundled alongside the interpreter so it ships inside the app.
-uv_version="0.11.22"
+uv_version="0.11.23"
 
 # SHA256 of the exact (immutable) release assets downloaded below. These guard
 # against a corrupted or tampered download — the build fails hard on a mismatch
@@ -30,7 +30,7 @@ uv_version="0.11.22"
 # and update these whenever the versions above change (see README "Updating the
 # bundled Python / uv").
 cpython_sha256="0e255968ed96255df59b6bc9504545260c11de3171e48f7640668d88154945ba"
-uv_sha256="97a45e2ff8d5ea262623eed57ec2d9c468a42d74496d5c3c3eef11340235bd7f"
+uv_sha256="71ef9de85db820749b3b12b7585624ee279e9c5afcbc6f8236bc3d628c4305b0"
 
 verify_sha256() {
     # $1 = file, $2 = expected hash
