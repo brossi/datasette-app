@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { _electron } from 'playwright';
+import { execFileSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -65,4 +66,44 @@ test('App launches, builds the venv via uv, and quits', async () => {
   expect(installed).toBe(true);
 
   await app.close();
+});
+
+test('Opening a SQLite database file renders its table', async () => {
+  test.setTimeout(0);
+
+  // Build a tiny fixture database with the bundled interpreter, so this test
+  // exercises the real open-database path (Electron -> datasette-app-support ->
+  // datasette -> rendered page) end to end. The venv built by the test above is
+  // reused, so this launch is fast.
+  const py = path.join(process.cwd(), 'python', 'bin', 'python3');
+  const dbPath = path.join(os.tmpdir(), `datasette-app-test-${Date.now()}.db`);
+  execFileSync(py, [
+    '-c',
+    'import sqlite3,sys; c=sqlite3.connect(sys.argv[1]);' +
+      "c.execute('create table creatures (id integer primary key, name text)');" +
+      "c.execute(\"insert into creatures (name) values ('Cleo'),('Pancakes')\");" +
+      'c.commit(); c.close()',
+    dbPath,
+  ]);
+
+  const app = await _electron.launch({ args: ['main.js'] });
+  try {
+    const window = await app.firstWindow();
+    await window.waitForSelector('#run-sql-link', { timeout: 90000 });
+
+    // Emulate the macOS "Open With… Datasette" event for the fixture database.
+    await app.evaluate(({ app: electronApp }, p) => {
+      electronApp.emit('open-file', { preventDefault() {} }, p);
+    }, dbPath);
+
+    // The window should navigate to the opened database's overview page and
+    // list its table. Assert on the visible table link (the name also appears in
+    // the hidden SQL editor, so target the link role specifically).
+    await expect(window.getByRole('link', { name: 'creatures' })).toBeVisible({
+      timeout: 30000,
+    });
+  } finally {
+    await app.close();
+    fs.rmSync(dbPath, { force: true });
+  }
 });
