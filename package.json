@@ -8,6 +8,7 @@
     "start": "DEBUGMENU=1 electron --trace-warnings --inspect=5858 .",
     "test": "playwright test",
     "pack": "electron-builder --dir",
+    "pack:local": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --dir && codesign --force --deep --sign - dist/mac-arm64/Datasette.app",
     "dist": "electron-builder --publish never"
   },
   "build": {
@@ -59,6 +60,13 @@
         "to": "python",
         "filter": [
           "**/*"
+        ]
+      },
+      {
+        "from": "wheels",
+        "to": "wheels",
+        "filter": [
+          "**/*.whl"
         ]
       }
     ]

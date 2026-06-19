@@ -67,14 +67,34 @@ function netRequestJson(url, { method = "GET", headers = {}, body } = {}) {
 
 const RANDOM_SECRET = crypto.randomBytes(32).toString("hex");
 
+const DATASETTE_APP_DIR = path.join(os.homedir(), ".datasette-app");
+// Keep uv's package cache inside the app's own data directory so it is
+// self-contained and removed cleanly when ~/.datasette-app is deleted, instead
+// of writing to the shared ~/.cache/uv.
+const UV_CACHE_DIR = path.join(DATASETTE_APP_DIR, "uv-cache");
+
+// Environment for every bundled-uv invocation. UV_PYTHON_DOWNLOADS=never keeps
+// uv pinned to the interpreter we bundle (it never fetches its own Python);
+// UV_CACHE_DIR keeps its cache under the app's data directory.
+function uvEnv() {
+  return {
+    ...process.env,
+    UV_PYTHON_DOWNLOADS: "never",
+    UV_CACHE_DIR,
+  };
+}
+
 // 'SQLite format 3\0':
 const SQLITE_HEADER = Buffer.from("53514c69746520666f726d6174203300", "hex");
 
 const minPackageVersions = {
   datasette: "0.65",
-  // Hold at 0.11.8 (latest on PyPI) until the 0.12 fix is published; a locally
-  // patched build already reports >= this.
-  "datasette-app-support": "0.11.8",
+  // datasette-app-support is NOT installed from PyPI — it ships as a wheel
+  // bundled with the app and is installed from that file (see
+  // ensurePackagesInstalled / findBundledPluginWheel), so the #153 fix reaches
+  // users without waiting on a PyPI release. It stays listed here so its name is
+  // included in DATASETTE_DEFAULT_PLUGINS; the version mirrors the bundled wheel.
+  "datasette-app-support": "0.12",
   "datasette-vega": "0.6.2",
   "datasette-cluster-map": "0.18.2",
   "datasette-pretty-json": "0.3",
@@ -399,12 +419,9 @@ class DatasetteServer {
     });
   }
 
-  // Run the bundled uv binary. UV_PYTHON_DOWNLOADS=never keeps uv pinned to the
-  // interpreter we bundle, so it never fetches a Python of its own.
+  // Run the bundled uv binary with the pinned uv environment (see uvEnv).
   async uvCommand(args) {
-    return await this.execCommand(findUv(), args, {
-      env: { ...process.env, UV_PYTHON_DOWNLOADS: "never" },
-    });
+    return await this.execCommand(findUv(), args, { env: uvEnv() });
   }
 
   venvPython() {
@@ -443,7 +460,7 @@ class DatasetteServer {
     const versionsProcess = await execFile(
       findUv(),
       ["pip", "list", "--python", venv_python, "--format", "json"],
-      { env: { ...process.env, UV_PYTHON_DOWNLOADS: "never" } }
+      { env: uvEnv() }
     );
     const versions = {};
     for (const item of JSON.parse(versionsProcess.stdout)) {
@@ -481,21 +498,35 @@ class DatasetteServer {
   async ensurePackagesInstalled() {
     const venv_dir = await this.ensureVenv();
     const venv_python = path.join(venv_dir, "bin", "python3");
-    // Anything need installing or upgrading?
+    // Install the pinned third-party plugins from PyPI. datasette-app-support is
+    // excluded here and installed from the bundled wheel below.
     const needsInstall = [];
     for (const [name, requiredVersion] of Object.entries(minPackageVersions)) {
+      if (name === "datasette-app-support") {
+        continue;
+      }
       needsInstall.push(`${name}>=${requiredVersion}`);
     }
     try {
       await this.uvCommand(
         ["pip", "install", "--python", venv_python].concat(needsInstall)
       );
+      // Install the patched datasette-app-support from the wheel bundled with
+      // the app. Installing a wheel by path always replaces whatever is present,
+      // so a venv left over from an older app (carrying the unpatched 0.11.8) is
+      // upgraded to the fixed build. This is what actually delivers the #153 fix.
+      await this.uvCommand([
+        "pip",
+        "install",
+        "--python",
+        venv_python,
+        findBundledPluginWheel(),
+      ]);
     } catch (e) {
-      dialog.showMessageBox({
-        type: "error",
-        message: "Error installing packages",
-        detail: e.toString(),
-      });
+      // Fail loud: abort startup so the caller surfaces the error via
+      // showStartupFailure, rather than spawning a datasette whose packages are
+      // missing (which would crash or hang — the original #153 failure mode).
+      throw new Error(`Failed to install Python packages:\n\n${e.toString()}`);
     }
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
@@ -571,6 +602,36 @@ function findUv() {
     }
   }
   console.log("Could not find uv, checked", possibilities);
+  app.quit();
+}
+
+// Locate the datasette-app-support wheel bundled with the app (via the
+// extraResources "wheels" mapping). Shipping the plugin as a wheel means the
+// #153 fix does not depend on a PyPI release. See ensurePackagesInstalled.
+function findBundledPluginWheel() {
+  const dirs = [
+    // In packaged app
+    path.join(process.resourcesPath, "wheels"),
+    // In development
+    path.join(__dirname, "wheels"),
+  ];
+  for (const dir of dirs) {
+    if (fs.existsSync(dir)) {
+      const wheel = fs
+        .readdirSync(dir)
+        .find(
+          (f) =>
+            f.startsWith("datasette_app_support-") && f.endsWith(".whl")
+        );
+      if (wheel) {
+        return path.join(dir, wheel);
+      }
+    }
+  }
+  console.log(
+    "Could not find bundled datasette-app-support wheel, checked",
+    dirs
+  );
   app.quit();
 }
 
