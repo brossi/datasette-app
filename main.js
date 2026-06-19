@@ -142,6 +142,19 @@ const minPackageVersions = {
 
 let enableDebugMenu = !!process.env.DEBUGMENU;
 
+// Hand a link to the system browser, but only if it is http/https. Refuses
+// other schemes (file:, custom URL handlers, etc.) that page content should not
+// be able to launch, and ignores malformed URLs.
+function openExternalIfWeb(url) {
+  try {
+    if (/^https?:$/.test(new URL(url).protocol)) {
+      shell.openExternal(url);
+    }
+  } catch (e) {
+    /* malformed URL — ignore */
+  }
+}
+
 function configureWindow(window) {
   window.webContents.on("will-navigate", function (event, reqUrl) {
     // Links to external sites should open in system browser
@@ -149,8 +162,25 @@ function configureWindow(window) {
     let currentHost = new URL(window.webContents.getURL()).host;
     if (requestedHost && requestedHost != currentHost) {
       event.preventDefault();
-      shell.openExternal(reqUrl);
+      openExternalIfWeb(reqUrl);
     }
+  });
+  // window.open / target=_blank bypass will-navigate. Route external links to
+  // the system browser (and deny the popup); allow same-origin popups (the
+  // local Datasette server) to open as normal app windows.
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    let requestedHost;
+    try {
+      requestedHost = new URL(url).host;
+    } catch (e) {
+      return { action: "deny" };
+    }
+    const currentHost = new URL(window.webContents.getURL()).host;
+    if (requestedHost && requestedHost !== currentHost) {
+      openExternalIfWeb(url);
+      return { action: "deny" };
+    }
+    return { action: "allow" };
   });
   window.webContents.on("did-fail-load", (event) => {
     window.loadFile("did-fail-load.html");
