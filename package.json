@@ -91,5 +91,9 @@
     "electron-prompt": "^1.7.0",
     "portfinder": "^1.0.32",
     "update-electron-app": "^3.2.0"
+  },
+  "//overrides": "lodash is only pulled in transitively (portfinder->async, electron-builder). Force >=4.18.1 to keep the GHSA-r5fr-rjxr-66jc / GHSA-f23m-r3pf-42rh / GHSA-xxjr-mmjv-4gpg fixes durable across lockfile regeneration.",
+  "overrides": {
+    "lodash": "^4.18.1"
   }
 }
