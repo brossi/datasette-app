@@ -23,10 +23,47 @@ const execFile = util.promisify(cp.execFile);
 const mkdir = util.promisify(fs.mkdir);
 
 const { updateElectronApp } = require("update-electron-app");
+const pkg = require("./package.json");
 
-updateElectronApp({
-  updateInterval: "1 hour",
-});
+// Resolve the GitHub "owner/repo" that auto-updates are pulled from.
+// Priority: the DATASETTE_APP_UPDATE_REPO override, then package.json
+// "repository". A fork can therefore repoint its update feed by setting that
+// env var at build time, or simply by owning the repository field — without a
+// code change. Accepts either an "owner/repo" string or a GitHub URL. Returns
+// null when nothing usable is configured (updates are then skipped, not
+// silently pointed somewhere unexpected). The update source is deliberately NOT
+// user-configurable at runtime (e.g. via a config file): letting an end user
+// redirect a signed auto-updater would be a supply-chain risk.
+function resolveUpdateRepo() {
+  let raw = process.env.DATASETTE_APP_UPDATE_REPO || "";
+  if (!raw) {
+    const repo = pkg.repository;
+    raw = typeof repo === "string" ? repo : (repo && repo.url) || "";
+  }
+  raw = raw.trim().replace(/\.git$/, "");
+  const urlMatch = raw.match(/github\.com[/:]([^/]+\/[^/]+)$/);
+  if (urlMatch) {
+    return urlMatch[1];
+  }
+  if (/^[^/\s]+\/[^/\s]+$/.test(raw)) {
+    return raw;
+  }
+  return null;
+}
+
+if (process.env.DATASETTE_APP_DISABLE_UPDATES) {
+  console.log("Auto-update disabled via DATASETTE_APP_DISABLE_UPDATES");
+} else {
+  const updateRepo = resolveUpdateRepo();
+  if (updateRepo) {
+    updateElectronApp({
+      repo: updateRepo,
+      updateInterval: "1 hour",
+    });
+  } else {
+    console.log("Auto-update skipped: no update repository configured");
+  }
+}
 
 // Minimal JSON-over-HTTP helper built on Electron's native `net` module,
 // replacing the unmaintained electron-request dependency. Resolves with the

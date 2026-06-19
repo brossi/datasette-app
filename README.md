@@ -95,6 +95,15 @@ rebuild and re-bundle the wheel:
 checkout.) Keep the version in `minPackageVersions` (in `main.js`) in step with
 the bundled wheel's version.
 
+## Auto-update
+
+Signed builds check for updates hourly via [update-electron-app](https://github.com/electron/update-electron-app). The update feed is a GitHub `owner/repo`, resolved in this order:
+
+1. The `DATASETTE_APP_UPDATE_REPO` environment variable (`owner/repo` or a GitHub URL) — useful for testing or for a fork build that ships its own releases.
+2. The `repository` field in `package.json` (the default).
+
+Set `DATASETTE_APP_DISABLE_UPDATES=1` to turn auto-update off entirely. The feed is intentionally not user-configurable at runtime — letting an end user redirect a signed auto-updater would be a supply-chain risk. (Auto-update only runs in packaged, code-signed builds; it is a no-op in development.)
+
 ## Release process
 
 To ship a new release, increment the version number in `package.json` and then [create a new release](https://github.com/simonw/datasette-app/releases/new) with a matching tag.
