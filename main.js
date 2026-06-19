@@ -209,10 +209,18 @@ class DatasetteServer {
         });
       } catch (e) {
         reject(e);
+        return;
       }
       this.process = process;
+      // Track whether we ever reached a running server. If the process dies
+      // before that (e.g. a plugin crashes during invoke_startup), we must
+      // reject so the caller can surface the error rather than letting the
+      // loading window spin forever. See datasette-app#153.
+      let startupComplete = false;
+      const startupStderr = [];
       process.stderr.on("data", async (data) => {
         if (/Uvicorn running/.test(data)) {
+          startupComplete = true;
           serverHasStarted = true;
           if (backupPath) {
             await this.apiRequest("/-/restore-temporary-from-file", {
@@ -223,6 +231,13 @@ class DatasetteServer {
           resolve(`http://localhost:${this.port}/`);
         }
         for (const line of data.toString().split("\n")) {
+          if (!startupComplete && line.trim()) {
+            // Keep a capped tail of pre-startup stderr for error reporting
+            startupStderr.push(line.trim());
+            if (startupStderr.length > 50) {
+              startupStderr.shift();
+            }
+          }
           this.serverLog(line, "stderr");
         }
       });
@@ -233,8 +248,23 @@ class DatasetteServer {
       });
       process.on("error", (err) => {
         console.error("Failed to start datasette", err);
-        this.app.quit();
-        reject();
+        if (!startupComplete) {
+          reject(err);
+        }
+      });
+      process.on("exit", (code, signal) => {
+        if (!startupComplete) {
+          // The server exited during startup and never came up. Surface the
+          // captured stderr so the failure is visible instead of a silent hang.
+          const tail = startupStderr.slice(-25).join("\n");
+          reject(
+            new Error(
+              `Datasette server exited during startup (code ${code}${
+                signal ? `, signal ${signal}` : ""
+              }).\n\n${tail}`
+            )
+          );
+        }
       });
     });
   }
@@ -506,6 +536,23 @@ function createLoadingWindow() {
   return mainWindow;
 }
 
+function showStartupFailure(loadingWindow, err) {
+  // Replace the spinning loading screen with the failure page and show a
+  // dialog carrying the underlying error, so a startup crash is visible
+  // instead of an indefinite "Loading…" hang (datasette-app#153).
+  const detail = err && err.message ? err.message : String(err);
+  console.error("Datasette server failed to start:", detail);
+  if (loadingWindow && !loadingWindow.isDestroyed()) {
+    loadingWindow.loadFile("did-fail-load.html");
+  }
+  dialog.showMessageBox({
+    type: "error",
+    message: "Datasette server failed to start",
+    detail,
+    buttons: ["OK"],
+  });
+}
+
 async function importCsvFromUrl(url, tableName) {
   const response = await datasette.apiRequest("/-/open-csv-from-url", {
     url: url,
@@ -529,7 +576,7 @@ async function importCsvFromUrl(url, tableName) {
 async function initializeApp() {
   /* We don't use openPath here because we want to control the transition from the
      loading.html page to the index page once the server has started up */
-  createLoadingWindow();
+  const loadingWindow = createLoadingWindow();
   let freePort = null;
   try {
     freePort = await portfinder.getPortPromise({ port: 8001 });
@@ -544,7 +591,12 @@ async function initializeApp() {
   datasette.on("serverLog", (item) => {
     console.log(item);
   });
-  await datasette.startOrRestart();
+  try {
+    await datasette.startOrRestart();
+  } catch (err) {
+    showStartupFailure(loadingWindow, err);
+    return;
+  }
   datasette.openPath("/", {
     forceMainWindow: true,
   });
