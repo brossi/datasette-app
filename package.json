@@ -48,7 +48,8 @@
       "entitlements": "build/entitlements.mac.plist",
       "entitlementsInherit": "build/entitlements.mac.plist",
       "binaries": [
-        "./dist/mac/Datasette.app/Contents/Resources/python/bin/python3.13"
+        "./dist/mac-arm64/Datasette.app/Contents/Resources/python/bin/python3.13",
+        "./dist/mac-arm64/Datasette.app/Contents/Resources/python/bin/uv"
       ]
     },
     "afterSign": "scripts/notarize.js",
@@ -63,6 +64,9 @@
     ]
   },
   "repository": "https://github.com/simonw/datasette-app",
+  "engines": {
+    "node": ">=20"
+  },
   "keywords": [
     "Electron"
   ],

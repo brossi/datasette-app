@@ -71,13 +71,15 @@ const RANDOM_SECRET = crypto.randomBytes(32).toString("hex");
 const SQLITE_HEADER = Buffer.from("53514c69746520666f726d6174203300", "hex");
 
 const minPackageVersions = {
-  datasette: "0.59",
+  datasette: "0.65",
+  // Hold at 0.11.8 (latest on PyPI) until the 0.12 fix is published; a locally
+  // patched build already reports >= this.
   "datasette-app-support": "0.11.8",
   "datasette-vega": "0.6.2",
-  "datasette-cluster-map": "0.17.1",
-  "datasette-pretty-json": "0.2.1",
-  "datasette-edit-schema": "0.4",
-  "datasette-configure-fts": "1.1",
+  "datasette-cluster-map": "0.18.2",
+  "datasette-pretty-json": "0.3",
+  "datasette-edit-schema": "0.7.1",
+  "datasette-configure-fts": "1.1.4",
   "datasette-leaflet": "0.2.2",
 };
 
@@ -336,14 +338,14 @@ class DatasetteServer {
     }
   }
 
-  async execCommand(command, args) {
+  async execCommand(command, args, options) {
     return new Promise((resolve, reject) => {
       // Use spawn() not execFile() so we can tail stdout/stderr
       console.log(command, args);
       // I tried process.hrtime() here but consistently got a
       // "Cannot access 'process' before initialization" error
       const start = new Date().valueOf(); // millisecond timestamp
-      const process = cp.spawn(command, args);
+      const process = cp.spawn(command, args, options || {});
       const collectedErr = [];
       this.processLog({
         type: "start",
@@ -397,45 +399,52 @@ class DatasetteServer {
     });
   }
 
-  async installPlugin(plugin) {
-    const pip_binary = path.join(
+  // Run the bundled uv binary. UV_PYTHON_DOWNLOADS=never keeps uv pinned to the
+  // interpreter we bundle, so it never fetches a Python of its own.
+  async uvCommand(args) {
+    return await this.execCommand(findUv(), args, {
+      env: { ...process.env, UV_PYTHON_DOWNLOADS: "never" },
+    });
+  }
+
+  venvPython() {
+    return path.join(
       process.env.HOME,
       ".datasette-app",
       "venv",
       "bin",
-      "pip"
+      "python3"
     );
-    await this.execCommand(pip_binary, [
+  }
+
+  async installPlugin(plugin) {
+    await this.uvCommand([
+      "pip",
       "install",
+      "--python",
+      this.venvPython(),
       plugin,
-      "--disable-pip-version-check",
     ]);
   }
 
   async uninstallPlugin(plugin) {
-    const pip_binary = path.join(
-      process.env.HOME,
-      ".datasette-app",
-      "venv",
-      "bin",
-      "pip"
-    );
-    await this.execCommand(pip_binary, [
+    await this.uvCommand([
+      "pip",
       "uninstall",
+      "--python",
+      this.venvPython(),
       plugin,
-      "--disable-pip-version-check",
-      "-y",
     ]);
   }
 
   async packageVersions() {
     const venv_dir = await this.ensureVenv();
-    const pip_path = path.join(venv_dir, "bin", "pip");
-    const versionsProcess = await execFile(pip_path, [
-      "list",
-      "--format",
-      "json",
-    ]);
+    const venv_python = path.join(venv_dir, "bin", "python3");
+    const versionsProcess = await execFile(
+      findUv(),
+      ["pip", "list", "--python", venv_python, "--format", "json"],
+      { env: { ...process.env, UV_PYTHON_DOWNLOADS: "never" } }
+    );
     const versions = {};
     for (const item of JSON.parse(versionsProcess.stdout)) {
       versions[item.name] = item.version;
@@ -463,28 +472,28 @@ class DatasetteServer {
       }
     }
     if (shouldCreateVenv) {
-      await this.execCommand(findPython(), ["-m", "venv", venv_dir]);
+      // uv builds the venv around our bundled interpreter (never its own).
+      await this.uvCommand(["venv", "--python", findPython(), venv_dir]);
     }
     return venv_dir;
   }
 
   async ensurePackagesInstalled() {
     const venv_dir = await this.ensureVenv();
+    const venv_python = path.join(venv_dir, "bin", "python3");
     // Anything need installing or upgrading?
     const needsInstall = [];
     for (const [name, requiredVersion] of Object.entries(minPackageVersions)) {
       needsInstall.push(`${name}>=${requiredVersion}`);
     }
-    const pip_path = path.join(venv_dir, "bin", "pip");
     try {
-      await this.execCommand(
-        pip_path,
-        ["install"].concat(needsInstall).concat(["--disable-pip-version-check"])
+      await this.uvCommand(
+        ["pip", "install", "--python", venv_python].concat(needsInstall)
       );
     } catch (e) {
       dialog.showMessageBox({
         type: "error",
-        message: "Error running pip",
+        message: "Error installing packages",
         detail: e.toString(),
       });
     }
@@ -546,6 +555,22 @@ function findPython() {
     }
   }
   console.log("Could not find python3, checked", possibilities);
+  app.quit();
+}
+
+function findUv() {
+  const possibilities = [
+    // In packaged app
+    path.join(process.resourcesPath, "python", "bin", "uv"),
+    // In development
+    path.join(__dirname, "python", "bin", "uv"),
+  ];
+  for (const candidate of possibilities) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  console.log("Could not find uv, checked", possibilities);
   app.quit();
 }
 

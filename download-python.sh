@@ -7,6 +7,10 @@ set -euo pipefail
 release_date="20260610"
 cpython_version="3.13.14"
 
+# uv (https://github.com/astral-sh/uv) manages the app's virtualenv and package
+# installs. It is bundled alongside the interpreter so it ships inside the app.
+uv_version="0.11.22"
+
 # Match the host architecture so the bundled interpreter runs natively
 # (arm64 Macs would otherwise run an x86_64 Python under Rosetta).
 arch=`uname -m`
@@ -26,4 +30,16 @@ if [ ! -d "$standalone_python" ]; then
     # Delete the bundled stdlib test suite, saving ~23MB of disk space.
     # Globbed so it stays correct across Python minor versions.
     rm -rf python/lib/python3.*/test
+fi
+
+# Bundle the uv binary next to the interpreter (python/ is copied into the app's
+# Resources, so this ships with no extra packaging config).
+if [ ! -f "python/bin/uv" ]; then
+    uv_dir="uv-${arch}-apple-darwin"
+    uv_filename="${uv_dir}.tar.gz"
+    uv_url="https://github.com/astral-sh/uv/releases/download/${uv_version}/${uv_filename}"
+    curl -L -O "$uv_url"
+    tar -xzf "${uv_filename}"
+    mv "${uv_dir}/uv" python/bin/uv
+    rm -rf "${uv_filename}" "${uv_dir}"
 fi
