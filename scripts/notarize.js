@@ -14,6 +14,16 @@ exports.default = async function notarizing(context) {
     return;
   }
 
+  // notarytool requires a Team ID. Fail clearly here rather than letting the
+  // notarize call fail deep inside Apple's tooling with an opaque message.
+  if (!process.env.APPLE_TEAM_ID) {
+    throw new Error(
+      "Notarization requires APPLE_TEAM_ID to be set (alongside APPLEID / " +
+        "APPLEIDPASS). Set it to your Apple Developer Team ID, or unset APPLEID " +
+        "to skip notarization for a local build."
+    );
+  }
+
   const appName = context.packager.appInfo.productFilename;
 
   // @electron/notarize v2+ uses Apple's notarytool, which requires a teamId.

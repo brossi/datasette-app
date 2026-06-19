@@ -18,13 +18,8 @@ jobs:
             ${{ runner.os }}-build-${{ env.cache-name }}-
             ${{ runner.os }}-build-
             ${{ runner.os }}-
-      - uses: actions/cache@v4
-        name: Configure pip caching
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
+      # No pip caching: the app installs Python packages with uv (into its own
+      # UV_CACHE_DIR), and there is no requirements.txt to key a cache on.
       - name: Install Node dependencies
         run: npm install
       - name: Download standalone Python
