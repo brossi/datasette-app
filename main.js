@@ -22,31 +22,65 @@ const util = require("util");
 const execFile = util.promisify(cp.execFile);
 const mkdir = util.promisify(fs.mkdir);
 
-const { updateElectronApp } = require("update-electron-app");
-const pkg = require("./package.json");
+// The app's data directory (venv, caches, and persisted config all live here).
+const DATASETTE_APP_DIR = path.join(os.homedir(), ".datasette-app");
+const CONFIG_PATH = path.join(DATASETTE_APP_DIR, "config.json");
 
-// Resolve the GitHub "owner/repo" that auto-updates are pulled from.
-// Priority: the DATASETTE_APP_UPDATE_REPO override, then package.json
-// "repository". A fork can therefore repoint its update feed by setting that
-// env var at build time, or simply by owning the repository field — without a
-// code change. Accepts either an "owner/repo" string or a GitHub URL. Returns
-// null when nothing usable is configured (updates are then skipped, not
-// silently pointed somewhere unexpected). The update source is deliberately NOT
-// user-configurable at runtime (e.g. via a config file): letting an end user
-// redirect a signed auto-updater would be a supply-chain risk.
-function resolveUpdateRepo() {
-  let raw = process.env.DATASETTE_APP_UPDATE_REPO || "";
-  if (!raw) {
-    const repo = pkg.repository;
-    raw = typeof repo === "string" ? repo : (repo && repo.url) || "";
+// Read the app's small JSON config file (returns {} if absent or unreadable).
+function readConfig() {
+  try {
+    return JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8")) || {};
+  } catch (e) {
+    return {};
   }
-  raw = raw.trim().replace(/\.git$/, "");
+}
+
+// Merge a patch into the config file and persist it. Returns the new config.
+function writeConfig(patch) {
+  const next = { ...readConfig(), ...patch };
+  fs.mkdirSync(DATASETTE_APP_DIR, { recursive: true });
+  fs.writeFileSync(CONFIG_PATH, JSON.stringify(next, null, 2) + "\n");
+  return next;
+}
+
+// Normalise a GitHub "owner/repo" or GitHub URL to "owner/repo"; null if invalid.
+function normalizeRepo(raw) {
+  raw = (raw || "").trim().replace(/\.git$/, "");
   const urlMatch = raw.match(/github\.com[/:]([^/]+\/[^/]+)$/);
   if (urlMatch) {
     return urlMatch[1];
   }
   if (/^[^/\s]+\/[^/\s]+$/.test(raw)) {
     return raw;
+  }
+  return null;
+}
+
+const { updateElectronApp } = require("update-electron-app");
+const pkg = require("./package.json");
+
+// Resolve the GitHub "owner/repo" that auto-updates are pulled from. Priority:
+//   1. DATASETTE_APP_UPDATE_REPO env override (testing / build-time pin)
+//   2. the user's persisted choice (config.json "updateRepo", set via the
+//      File -> Update Source… menu)
+//   3. package.json "repository" (the default / upstream)
+// Returns null when nothing usable is configured (updates are then skipped, not
+// silently pointed somewhere unexpected). The feed only ever changes from an
+// explicit, confirmed user action or build/env config — never silently from
+// page content — so a malicious page cannot redirect the signed updater.
+function resolveUpdateRepo() {
+  const candidates = [
+    process.env.DATASETTE_APP_UPDATE_REPO,
+    readConfig().updateRepo,
+    typeof pkg.repository === "string"
+      ? pkg.repository
+      : pkg.repository && pkg.repository.url,
+  ];
+  for (const candidate of candidates) {
+    const repo = normalizeRepo(candidate);
+    if (repo) {
+      return repo;
+    }
   }
   return null;
 }
@@ -104,7 +138,6 @@ function netRequestJson(url, { method = "GET", headers = {}, body } = {}) {
 
 const RANDOM_SECRET = crypto.randomBytes(32).toString("hex");
 
-const DATASETTE_APP_DIR = path.join(os.homedir(), ".datasette-app");
 // Keep uv's package cache inside the app's own data directory so it is
 // self-contained and removed cleanly when ~/.datasette-app is deleted, instead
 // of writing to the shared ~/.cache/uv.
@@ -1169,6 +1202,62 @@ function buildMenu() {
         {
           label: "Access Control",
           submenu: accessControlItems,
+        },
+        { type: "separator" },
+        {
+          label: "Update Source…",
+          click: async () => {
+            const current = resolveUpdateRepo() || "";
+            let input;
+            try {
+              input = await prompt({
+                title: "Set Update Source",
+                label:
+                  'GitHub repository for app updates ("owner/repo" or a GitHub URL).\nLeave blank to reset to the default.',
+                value: current,
+                type: "input",
+                alwaysOnTop: true,
+              });
+            } catch (e) {
+              console.error(e);
+              return;
+            }
+            if (input === null) {
+              return; // cancelled
+            }
+            if (input.trim() === "") {
+              writeConfig({ updateRepo: null });
+            } else {
+              const repo = normalizeRepo(input);
+              if (!repo) {
+                dialog.showMessageBox({
+                  type: "error",
+                  message: "Invalid repository",
+                  detail:
+                    'Enter a GitHub repository as "owner/repo" or a full GitHub URL.',
+                });
+                return;
+              }
+              writeConfig({ updateRepo: repo });
+            }
+            const resolved = resolveUpdateRepo();
+            const { response } = await dialog.showMessageBox({
+              type: "info",
+              message: resolved
+                ? `Updates will come from ${resolved}`
+                : "Updates are disabled (no repository configured)",
+              detail:
+                "This controls where the app downloads signed updates from. " +
+                "Restart Datasette to apply the change.",
+              buttons: ["Restart Now", "Later"],
+              defaultId: 0,
+              cancelId: 1,
+            });
+            if (response === 0) {
+              app.relaunch();
+              app.quit();
+            }
+          },
         },
         { type: "separator" },
         {

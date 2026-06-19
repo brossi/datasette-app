@@ -99,10 +99,11 @@ the bundled wheel's version.
 
 Signed builds check for updates hourly via [update-electron-app](https://github.com/electron/update-electron-app). The update feed is a GitHub `owner/repo`, resolved in this order:
 
-1. The `DATASETTE_APP_UPDATE_REPO` environment variable (`owner/repo` or a GitHub URL) — useful for testing or for a fork build that ships its own releases.
-2. The `repository` field in `package.json` (the default).
+1. The `DATASETTE_APP_UPDATE_REPO` environment variable (`owner/repo` or a GitHub URL) — useful for testing or a build-time pin.
+2. The user's choice, set via **File → Update Source…** and persisted to `~/.datasette-app/config.json`. Enter `owner/repo` (or a GitHub URL), or leave it blank to reset to the default. Changes apply after a restart, which the dialog offers to do.
+3. The `repository` field in `package.json` (the default).
 
-Set `DATASETTE_APP_DISABLE_UPDATES=1` to turn auto-update off entirely. The feed is intentionally not user-configurable at runtime — letting an end user redirect a signed auto-updater would be a supply-chain risk. (Auto-update only runs in packaged, code-signed builds; it is a no-op in development.)
+Set `DATASETTE_APP_DISABLE_UPDATES=1` to turn auto-update off entirely. The feed only ever changes from an explicit user action (the menu) or build/env config — never silently from page content — so untrusted content cannot redirect the signed updater. (Auto-update only runs in packaged, code-signed builds; it is a no-op in development.)
 
 ## Release process
 
