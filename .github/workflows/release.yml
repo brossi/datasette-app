@@ -4,13 +4,16 @@ on:
   release:
     types: [created]
 
+permissions:
+  contents: write
+
 jobs:
   release:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v4
       - name: Configure Node caching
-        uses: actions/cache@v2
+        uses: actions/cache@v4
         env:
           cache-name: cache-node-modules
         with:
@@ -20,18 +23,10 @@ jobs:
             ${{ runner.os }}-build-${{ env.cache-name }}-
             ${{ runner.os }}-build-
             ${{ runner.os }}-
-      - uses: actions/cache@v2
-        name: Configure pip caching
-        with:
-          path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
       - name: Install Node dependencies
         run: npm install
       - name: Download standalone Python
-        run: |
-          ./download-python.sh
+        run: ./download-python.sh
       - name: Run tests
         run: npm test
         timeout-minutes: 5
@@ -41,29 +36,13 @@ jobs:
           CSC_LINK: ${{ secrets.CSC_LINK }}
           APPLEID: ${{ secrets.APPLEID }}
           APPLEIDPASS: ${{ secrets.APPLEIDPASS }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: npm run dist
       - name: Create zip file
         run: |
-          cd dist/mac
-          ditto -c -k --keepParent Datasette.app Datasette-mac.app.zip
+          cd dist/mac-arm64
+          ditto -c -k --keepParent Datasette.app Datasette.app.zip
       - name: Upload release attachment
-        uses: actions/github-script@v4
+        uses: softprops/action-gh-release@v2
         with:
-          script: |
-            const fs = require('fs');
-            const tag = context.ref.replace("refs/tags/", "");
-            console.log("tag = ", tag);
-            // Get release for this tag
-            const release = await github.repos.getReleaseByTag({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              tag
-            });
-            // Upload the release asset
-            await github.repos.uploadReleaseAsset({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              release_id: release.data.id,
-              name: "Datasette.app.zip",
-              data: fs.readFileSync("dist/mac/Datasette-mac.app.zip")
-            });
+          files: dist/mac-arm64/Datasette.app.zip

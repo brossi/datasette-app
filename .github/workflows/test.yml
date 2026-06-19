@@ -40,7 +40,7 @@ jobs:
         run: npm test
         timeout-minutes: 5
       - name: Upload test videos
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: test-videos
           path: test-videos/
@@ -55,17 +55,17 @@ jobs:
       - name: Create zip file
         if: github.ref == 'refs/heads/main'
         run: |
-          cd dist/mac
+          cd dist/mac-arm64
           ditto -c -k --keepParent Datasette.app Datasette.app.zip
       - name: And a README (to work around GitHub double-zips)
         if: github.ref == 'refs/heads/main'
         run: |
-          echo "More information: https://datasette.io" > dist/mac/README.txt
+          echo "More information: https://datasette.io" > dist/mac-arm64/README.txt
       - name: Upload artifact
         if: github.ref == 'refs/heads/main'
         uses: actions/upload-artifact@v4
         with:
           name: Datasette-macOS
           path: |
-            dist/mac/Datasette.app.zip
-            dist/mac/README.txt
+            dist/mac-arm64/Datasette.app.zip
+            dist/mac-arm64/README.txt
